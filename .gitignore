@@ -30,4 +30,4 @@ desktop.ini
 .vscode/
 .idea/
 *.sublime-project
-*.sublime-workspace
+*.sublime-workspacedaemon/keys/
