@@ -1,41 +1,69 @@
 import asyncio
 import os
 import sys
+import uuid
 import asyncssh
 from dotenv import load_dotenv
 
-# Ensure core engine is importable
+# Ensure core & telemetry modules are importable
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from core.engine import ShellDeceptionEngine
+from telemetry.analyzer import SessionTelemetry
 
 load_dotenv()
 
 SSH_BANNER = "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13"
+
+# Active sessions repository
+ACTIVE_SESSIONS = {}
 
 
 class HoneypotSSHServer(asyncssh.SSHServer):
     def __init__(self):
         self.peer_ip = "127.0.0.1"
         self.peer_port = 0
+        self.session_id = str(uuid.uuid4())[:8]
 
     def connection_made(self, conn):
         peer = conn.get_extra_info('peername')
         if peer:
             self.peer_ip, self.peer_port = peer[0], peer[1]
-        print(f"\n[!] INCOMING CONNECTION from {self.peer_ip}:{self.peer_port}")
+        print(f"\n[!] INCOMING CONNECTION [{self.session_id}] from {self.peer_ip}:{self.peer_port}")
 
     def password_auth_supported(self):
         return True
 
     def validate_password(self, username, password):
-        print(f"[+] CREDENTIAL CAPTURED -> User: '{username}' | Password: '{password}' | Source: {self.peer_ip}")
+        print(f"[+] CREDENTIAL CAPTURED [{self.session_id}] -> User: '{username}' | Password: '{password}' | IP: {self.peer_ip}")
+        # Initialize structured session telemetry
+        telemetry = SessionTelemetry(
+            session_id=self.session_id,
+            client_ip=self.peer_ip,
+            client_port=self.peer_port,
+            username=username,
+            password=password
+        )
+        ACTIVE_SESSIONS[self.session_id] = telemetry
         return True
 
 
 async def handle_client(process: asyncssh.SSHServerProcess):
     username = process.get_extra_info('username') or "root"
+    peer = process.get_extra_info('peername')
     
-    # Initialize engine in thread-safe manner
+    # Retrieve matching telemetry session (or create fallback)
+    telemetry = None
+    for sess in ACTIVE_SESSIONS.values():
+        if sess.username == username:
+            telemetry = sess
+            break
+
+    if not telemetry:
+        session_id = str(uuid.uuid4())[:8]
+        telemetry = SessionTelemetry(session_id, peer[0] if peer else "127.0.0.1", peer[1] if peer else 0, username, "None")
+        ACTIVE_SESSIONS[session_id] = telemetry
+
+    # Initialize deception engine in thread-safe manner
     engine = await asyncio.to_thread(ShellDeceptionEngine)
     engine.user = username
 
@@ -68,7 +96,7 @@ async def handle_client(process: asyncssh.SSHServerProcess):
         if not cmd:
             continue
 
-        # Execute Gemini shell engine in background worker thread to NEVER block the event loop
+        # Execute command in background thread
         result = await asyncio.to_thread(engine.execute_command, cmd)
         
         if result.get("exit_session"):
@@ -76,6 +104,18 @@ async def handle_client(process: asyncssh.SSHServerProcess):
             break
 
         output = result.get("output", "")
+        
+        # Telemetry Analysis (MITRE ATT&CK & Canary Check)
+        analysis = telemetry.analyze_command(cmd, output)
+        
+        # Real-time SOC Console Alerts
+        if analysis.get("canary_alert"):
+            print(f"\n🚨 [CRITICAL CANARY TRIPWIRE TRIPPED!] Adversary accessed honeypot token: {analysis['canary_alert']['token_detected']}")
+            print(f"🚨 Command: '{cmd}' | Threat Score: {analysis['threat_score']}/100 [{analysis['severity']}]")
+        elif analysis.get("matched_techniques"):
+            for tech in analysis["matched_techniques"]:
+                print(f"[+] MITRE ATT&CK [{tech['id']} - {tech['name']}] detected | Threat Score: {analysis['threat_score']}/100 [{analysis['severity']}]")
+
         if output:
             formatted_output = output.replace("\r\n", "\n").replace("\n", "\r\n")
             process.stdout.write(formatted_output + "\r\n")
@@ -95,6 +135,7 @@ async def start_honeypot_daemon(host="0.0.0.0", port=2222):
 
     print(f"[*] Starting ShadowHoneypot SSH Daemon on {host}:{port}...")
     print(f"[*] Emulating: {SSH_BANNER}")
+    print("[*] Real-Time MITRE ATT&CK Telemetry & Canary Tripwire: ACTIVE\n")
 
     server = await asyncssh.create_server(
         HoneypotSSHServer,
