@@ -1,0 +1,33 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment variables & secrets (CRITICAL)
+.env
+.env.local
+*.pem
+*.key
+
+# Honeypot internal session logs & captures
+logs/
+telemetry/captures/
+*.log
+
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE configs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
