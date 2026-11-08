@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  shadow-honeypot:
+    build: .
+    container_name: shadow-honeypot-soc
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "2222:2222"   # SSH Honeypot Trap Port
+      - "8000:8000"   # SOC Web Intelligence Dashboard
+    volumes:
+      - ./telemetry/captures:/app/telemetry/captures
